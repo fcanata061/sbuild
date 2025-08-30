@@ -1,0 +1,306 @@
+Manual Completo do sbuild - Gerenciador de Builds para Linux From Scratch
+============================================================================
+
+Este documento descreve como instalar, configurar e usar o **sbuild**, um
+gerenciador simples de receitas para compilar e instalar pacotes em sistemas
+Linux baseados em compilação manual (ex: Linux From Scratch).
+
+----------------------------------------------------------------------------
+1. INSTALAÇÃO
+----------------------------------------------------------------------------
+
+1.1. Requisitos:
+  - Linux com toolchain básico (gcc, g++, make)
+  - curl
+  - git
+  - tar, xz, gzip, bzip2, zstd
+  - fakeroot (opcional)
+  - sha256sum
+
+1.2. Compilando o sbuild:
+  $ g++ -o sbuild sbuild.cpp -std=c++17
+
+1.3. Estrutura de diretórios criada automaticamente pelo sbuild:
+  sbuild/
+    ├── recipes/         (receitas de pacotes em formato .ini)
+    │     └── <pacote>/
+    │          └── <pacote>.ini
+    ├── sources/         (tarballs originais e patches baixados)
+    │     └── <pacote>-<versão>/
+    │          └── patches/
+    ├── work/            (árvore de compilação)
+    │     └── <pacote>-<versão>/
+    ├── destdir/         (instalações temporárias)
+    │     └── <pacote>-<versão>/
+    ├── packages/        (arquivos .tar.zst/.tar.xz resultantes)
+    └── logs/            (saída de compilação, patch, instalação)
+
+----------------------------------------------------------------------------
+2. COMANDOS DO SBUILD
+----------------------------------------------------------------------------
+
+sbuild new <pacote>         -> cria uma receita vazia
+sbuild fetch <pacote>       -> baixa as sources e patches
+sbuild extract <pacote>     -> extrai as sources
+sbuild patch <pacote>       -> aplica patches automaticamente
+sbuild build <pacote>       -> compila o pacote
+sbuild check <pacote>       -> executa "make check/test"
+sbuild install <pacote>     -> instala em DESTDIR
+sbuild pkg <pacote>         -> empacota para packages/
+sbuild bi <pacote>          -> build + install
+sbuild bip <pacote>         -> build + install + package
+sbuild remove <pacote>      -> remove arquivos instalados via registro
+sbuild search <nome>        -> busca receitas disponíveis
+sbuild info <pacote>        -> mostra informações do pacote
+sbuild help                 -> mostra ajuda
+
+Abreviações:
+- f = fetch, e = extract, p = patch, b = build, i = install, c = check
+- bi = build + install, bip = build + install + package
+
+----------------------------------------------------------------------------
+3. CAMPOS DA RECEITA (.ini)
+----------------------------------------------------------------------------
+
+[package]
+name        = nome do pacote
+version     = versão
+source      = URL do tarball
+checksum    = SHA256 do tarball
+patches     = lista separada por vírgula (URL http/https, git:// ou arquivo local)
+strip       = 0 ou 1 (strip binários após instalar)
+fakeroot    = 0 ou 1 (usar fakeroot na instalação)
+pack        = zst | xz | gz | off (tipo de pacote gerado)
+
+[build]
+preconfig   = comandos executados antes do configure
+config      = comandos de configuração (./configure ...)
+build       = comandos de compilação (make ...)
+check       = comandos de testes (make check ...)
+install     = comandos de instalação (make DESTDIR=$DESTDIR install)
+postinstall = comandos após instalar
+hooks       = comandos executados após remover
+sync        = git add/commit/push do pacote para repositório próprio
+
+----------------------------------------------------------------------------
+4. EXEMPLOS DE RECEITAS REAIS
+----------------------------------------------------------------------------
+
+4.1. Binutils (Fase 1 - LFS Toolchain)
+--------------------------------------
+[package]
+name = binutils
+version = 2.41
+source = https://ftp.gnu.org/gnu/binutils/binutils-2.41.tar.xz
+checksum = e87a5e28c0f8287d2a70d8a618a79a9b6d3c4033f3e9b0b6d5c16a94ef6d5fb8
+strip = 1
+fakeroot = 0
+pack = zst
+
+[build]
+config = mkdir -v build && cd build && ../configure \\
+            --prefix=/tools       \\
+            --with-sysroot=$LFS   \\
+            --target=$LFS_TGT     \\
+            --disable-nls         \\
+            --enable-gprofng=no   \\
+            --disable-werror
+build = cd build && make -j$(nproc)
+install = cd build && make DESTDIR=$DESTDIR install
+postinstall =
+
+----------------------------------------------------------------------------
+4.2. GCC (Fase 1 - LFS Toolchain)
+---------------------------------
+[package]
+name = gcc
+version = 13.2.0
+source = https://ftp.gnu.org/gnu/gcc/gcc-13.2.0/gcc-13.2.0.tar.xz
+checksum = f6a7b6f27bb4e5c71e1c8a185da30258aab6fa41063f63683bcab9db3e8f53b7
+strip = 1
+fakeroot = 0
+pack = zst
+patches = https://gcc.gnu.org/git/gcc.git/patches/some_fix.patch
+
+[build]
+preconfig = tar -xf ../mpfr*.tar.xz && tar -xf ../gmp*.tar.xz && tar -xf ../mpc*.tar.gz && mv -v mpfr* mpfr && mv -v gmp* gmp && mv -v mpc* mpc
+config = mkdir -v build && cd build && ../configure \\
+            --target=$LFS_TGT     \\
+            --prefix=/tools       \\
+            --with-glibc-version=2.38 \\
+            --with-newlib         \\
+            --without-headers     \\
+            --enable-initfini-array \\
+            --disable-nls         \\
+            --disable-shared      \\
+            --disable-multilib    \\
+            --disable-decimal-float \\
+            --disable-threads     \\
+            --disable-libatomic   \\
+            --disable-libgomp     \\
+            --disable-libquadmath \\
+            --disable-libssp      \\
+            --disable-libvtv      \\
+            --disable-libstdcxx
+build = cd build && make -j$(nproc) all-gcc all-target-libgcc
+install = cd build && make DESTDIR=$DESTDIR install-gcc install-target-libgcc
+postinstall =
+
+----------------------------------------------------------------------------
+4.3. Glibc
+----------
+[package]
+name = glibc
+version = 2.38
+source = https://ftp.gnu.org/gnu/libc/glibc-2.38.tar.xz
+checksum = 1cf8f2fa2a343b3bf3f1e9465d9b91cce0ed6f2469fe3f4042afe7f184dd6f2b
+strip = 1
+fakeroot = 0
+pack = zst
+
+[build]
+config = mkdir -v build && cd build && ../configure \\
+            --prefix=/usr        \\
+            --disable-werror     \\
+            --enable-kernel=4.19 \\
+            --with-headers=/usr/include
+build = cd build && make -j$(nproc)
+check = cd build && make check
+install = cd build && make DESTDIR=$DESTDIR install
+postinstall = ln -sfv ../lib/ld-linux-x86-64.so.2 $DESTDIR/lib64
+
+----------------------------------------------------------------------------
+4.4. Firefox (Aplicação Complexa)
+---------------------------------
+[package]
+name = firefox
+version = 118.0
+source = https://ftp.mozilla.org/pub/firefox/releases/118.0/source/firefox-118.0.source.tar.xz
+checksum = <colocar sha256 real>
+strip = 0
+fakeroot = 1
+pack = zst
+
+[build]
+preconfig = ./mach bootstrap --application-choice=browser --no-interactive
+config = ./mach configure
+build = ./mach build
+check = ./mach test
+install = ./mach install --destdir=$DESTDIR
+postinstall = echo "Firefox instalado com sucesso"
+hooks = echo "Removido Firefox"
+sync = git add . && git commit -m 'Update firefox' && git push
+
+----------------------------------------------------------------------------
+5. COMO FUNCIONA O FLUXO COMPLETO
+----------------------------------------------------------------------------
+
+1. Baixar fontes com curl/git para sources/
+2. Extrair para work/
+3. Baixar e aplicar patches (sources/<pkg>/patches/ → work/)
+4. Executar comandos em ordem:
+   - preconfig → config → build → check → install → postinstall
+5. Instalar em DESTDIR/<pkg>-<versão>/
+6. Se pack != off → gerar tarball em packages/
+7. Registrar arquivos instalados para permitir "sbuild remove"
+8. Logs de cada etapa em logs/<pkg>-<etapa>.log
+9. Comando search permite procurar receitas por nome
+10. Comando info mostra detalhes de versão, fontes, dependências
+
+----------------------------------------------------------------------------
+6. DIFERENCIAIS DO SBUILD
+----------------------------------------------------------------------------
+
+- 100% em C++ puro, sem apt/pacman/emerge/dnf
+- Não resolve dependências automaticamente → controle total
+- Patches automáticos após extração
+- Uso de DESTDIR e fakeroot para instalar sem precisar ser root
+- Registro de arquivos para remoção limpa
+- Opções: strip binários, verificação sha256, revdep (análise de libs quebradas)
+- CLI com cores, spinner, logs
+- Sincronização com repositório git (sync)
+- Geração de pacotes compactados em zst/xz/gz
+
+============================================================================
+FIM DO MANUAL
+============================================================================
+
+////////////////////////////////
+
+Receita Binutils (Fase 1) para sbuild - Linux From Scratch
+----------------------------------------------------------
+
+Arquivo: recipes/binutils/binutils.ini
+
+[package]
+name = binutils
+version = 2.41
+source = https://ftp.gnu.org/gnu/binutils/binutils-2.41.tar.xz
+checksum = e87a5e28c0f8287d2a70d8a618a79a9b6d3c4033f3e9b0b6d5c16a94ef6d5fb8
+strip = 1
+fakeroot = 0
+pack = zst
+
+[build]
+config = mkdir -v build && cd build && ../configure \
+            --prefix=/tools       \
+            --with-sysroot=$LFS   \
+            --target=$LFS_TGT     \
+            --disable-nls         \
+            --enable-gprofng=no   \
+            --disable-werror
+build = cd build && make -j$(nproc)
+install = cd build && make DESTDIR=$DESTDIR install
+postinstall =
+
+----------------------------------------------------------
+Como usar:
+
+1. Defina as variáveis LFS (como no livro):
+   export LFS=/mnt/lfs
+   export LFS_TGT=$(uname -m)-lfs-linux-gnu
+
+2. Crie a receita com o sbuild:
+   ./sbuild new binutils
+   (substitua recipes/binutils/binutils.ini pelo conteúdo acima)
+
+3. Compile e instale em $LFS/tools:
+   DESTDIR=$LFS ./sbuild bi binutils
+
+   Isso resultará em:
+   $LFS/tools/bin/ld
+   $LFS/tools/bin/as
+   $LFS/tools/lib/...
+
+4. Empacotar (opcional):
+   ./sbuild pkg binutils
+
+   O pacote ficará em packages/binutils-2.41.tar.zst
+   Ao extrair dentro de $LFS, você terá a mesma estrutura de /tools.
+
+//////////////////////////////Exemplo de receita/////////////////////
+
+[package]
+name = gcc
+version = 13.2.0
+source = https://ftp.gnu.org/gnu/gcc/gcc-13.2.0/gcc-13.2.0.tar.xz
+checksum = 0d68d3a6cfb38c3c205b5b61896f8aeecc4430ebdcaf149048393ca5b3ec6ef3
+patches = https://www.linuxfromscratch.org/patches/lfs/12.1/gcc-13.2.0-upstream_fixes-1.patch
+strip = 1
+fakeroot = 1
+pack = zst
+
+[build]
+preconfig =
+config    = mkdir -v build && cd build && ../configure \
+             --prefix=/usr              \
+             --disable-multilib         \
+             --disable-bootstrap        \
+             --enable-languages=c,c++
+build     = cd build && make -j$(nproc) && make -k check
+install   = cd build && make DESTDIR=$DESTDIR install
+postinstall = ln -svr $DESTDIR/usr/bin/cpp $DESTDIR/lib/cpp
+
+[hooks]
+postremove =
+postsync =
